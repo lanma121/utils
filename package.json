@@ -1,0 +1,19 @@
+{
+  "name": "utils",
+  "version": "1.0.0",
+  "description": "utils code",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lanma121/utils.git"
+  },
+  "author": "tyler",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/lanma121/utils/issues"
+  },
+  "homepage": "https://github.com/lanma121/utils#readme"
+}
