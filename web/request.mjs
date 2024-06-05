@@ -33,3 +33,5 @@ export const request = (url, { data = undefined, ...option } = {}) => {
   result.controller = controller;
   return result;
 };
+
+export default request;

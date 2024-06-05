@@ -1,3 +1,16 @@
+
+const $e = (selector) => {
+  const elements = typeof selector === 'string'
+    ? document.querySelectorAll(selector)
+    : selector;
+
+  if (!elements || !elements.length) {
+    throw new Error(`Element "${selector}" not found`);
+  }
+
+  return elements.length > 1 ? elements : (elements[0] || elements);
+}
+
 /**
  * Creates a new DOM element with the given name and attributes.
  *
@@ -49,49 +62,143 @@ export const createEelement = (name, attributes = {}, doc = document) => {
 };
 
 /**
- * Binds an event listener to a DOM element or a selector.
+ * Add an event listener to a DOM element.
  *
- * @param {string|Element} selector - The selector or the DOM element to bind the event to.
- * @param {string} events - The event(s) to listen for.
- * @param {function} callback - The callback function to be executed when the event is triggered.
- * @param {Object} [options={}] - Additional options for the event listener.
- * @throws {TypeError} If selector, events, or callback is falsy.
- * @throws {Error} If the selector does not match any element in the document.
- * @return {AbortController} An AbortController instance to control the event listener.
+ * @param {Element} element - The element to add the event listener to.
+ * @param {string} eventName - The name of the event to listen for.
+ * @param {function} handler - The function to call when the event is fired.
+ * @param {Object} [options] - Options to pass to addEventListener.
+ * @param {AbortSignal} [options.signal] - An AbortSignal to abort the listener.
+ * @returns {AbortController} An AbortController for aborting the listener.
  */
-export const bindEvent = (selector, events, callback, options = {}) => {
-  if (!selector || !events || !callback) {
-    throw new TypeError(
-      "bind event error, selector, events, and callback are required"
+export const addEventListener = (element, eventName, handler, options = {}) => {
+  if (!element?.addEventListener) {
+    throw new Error(
+      `event bind failed: Element "${String(element?.nodeName)}" not found`
     );
   }
 
-  const controller = new AbortController();
+  if (!eventName) {
+    throw new Error(`event bind failed: eventName is missing`);
+  }
 
-  setTimeout(() => {
-    const dom =
-      selector instanceof Element ? selector : document.querySelector(selector);
-    if (!dom) {
-      throw new Error(`event bind failed: selector "${selector}" not found`);
+  if (!handler) {
+    throw new Error(`event bind failed: handler is missing`);
+  }
+
+  const abortController = new AbortController();
+  const listener = (event) => {
+    try {
+      handler(event);
+    } catch (error) {
+      console.error(
+        `error handling event "${event}"`,
+        new Error().stack,
+        error
+      );
+    }
+  };
+  // Remove the old listener before adding the new one to prevent multiple handlers.
+  element.removeEventListener(eventName, listener, {
+    signal: abortController.signal,
+    ...options,
+  });
+
+  element.addEventListener(eventName, listener, {
+    signal: abortController.signal,
+    ...options,
+  });
+
+  return abortController;
+};
+
+/**
++ * Add multiple event listeners to elements.
++ *
++ * @param {Element|string|NodeList} selectorOrElement - The element or selector to add the event listener to.
++ * @param {string} eventName - The name of the event to listen for.
++ * @param {function} handler - The function to call when the event is fired.
++ * @param {Object} [options] - Options to pass to addEventListener.
++ * @param {AbortSignal} [options.signal] - An AbortSignal to abort the listener.
++ * @returns {() => void} A function to abort all the listeners.
++ */
+export const bindEvents = (
+  selectorOrElement,
+  eventName,
+  handler,
+  options = {}
+) => {
+  if (!selectorOrElement) {
+    throw new Error(
+      `bindEvents failed: selectorOrElement is missing or not a truthy value.`
+    );
+  }
+
+  if (!eventName) {
+    throw new Error(`bindEvents failed: eventName is missing`);
+  }
+
+  if (!handler) {
+    throw new Error(`bindEvents failed: handler is missing`);
+  }
+
+  const elements = Array.from(
+    typeof selectorOrElement === "string"
+      ? document.querySelectorAll(selectorOrElement)
+      : selectorOrElement instanceof NodeList
+      ? selectorOrElement
+      : [selectorOrElement]
+  );
+  const controllers = elements.map((element) =>
+    addEventListener(element, eventName, handler, options)
+  );
+
+  return (reason) =>
+    controllers.forEach((controller) => controller.abort(reason));
+};
+
+
+/**
+ * Set an element as draggable.
+ *
+ * @param {string|Element|NodeList} selector - The selector of the element to make draggable.
+ *
+ * @example
+ * drag('.myDraggableElement'); // Make all elements with class 'myDraggableElement' draggable.
+ * drag(document.getElementById('myElement')); // Make the element with id 'myElement' draggable.
+ */
+export const drag = (selector, isLeftBound = true, isTopBound = true) => {
+  const element = $e(selector);
+  element.setAttribute('draggable', true); // Make the element draggable.
+  
+  // Store the initial position of the element.
+  let startX = 0;
+  let startY = 0;
+  let initialLeft = Number(getComputedStyle(element).left.replace('px', '')) || 0;
+  let initialRight = Number(getComputedStyle(element).right.replace('px', '')) || 0;
+  let initialTop = Number(getComputedStyle(element).top.replace('px', '')) || 0;
+  let initialBottom = Number(getComputedStyle(element).bottom.replace('px', '')) || 0;
+
+  // Set the event handler for the dragstart event.
+  bindEvents(element, 'dragstart', (event) => {
+    startX = event.clientX; // Store the x-coordinate of the mouse cursor at the start of the drag.
+    startY = event.clientY; // Store the y-coordinate of the mouse cursor at the start of the drag.
+  });
+
+  // Set the event handler for the dragend event.
+  bindEvents(element, 'dragend', (event) => {
+    const xDiff = event.clientX - startX;
+    const yDiff = event.clientY - startY;
+    if (isLeftBound) {
+      element.style.left = `${initialLeft += xDiff}px`;
+    } else {
+      element.style.right = `${initialRight -= xDiff}px`;
     }
 
-    const eventListener = (event) => {
-      try {
-        callback(event);
-      } catch (error) {
-        console.error(`error handling event "${events}"`, error);
-      }
-    };
-
-    dom.removeEventListener(events, eventListener, {
-      signal: controller.signal,
-      ...options,
-    });
-    dom.addEventListener(events, eventListener, {
-      signal: controller.signal,
-      ...options,
-    });
-  }, 0);
-
-  return controller;
-};
+    if (isTopBound) {
+      element.style.top = `${initialTop += yDiff}px`;
+    } else {
+      element.style.bottom = `${initialBottom -= yDiff}px`;
+    }
+  });
+}
