@@ -1,15 +1,81 @@
-
-const $e = (selector) => {
-  const elements = typeof selector === 'string'
-    ? document.querySelectorAll(selector)
-    : selector;
-
-  if (!elements || !elements.length) {
-    throw new Error(`Element "${selector}" not found`);
+export const insertHtml = (targetElement, htmlContent, insertPosition = 'beforeend') => {
+  if (!targetElement) {
+    throw new Error('Target element is null or undefined');
   }
 
-  return elements.length > 1 ? elements : (elements[0] || elements);
+  if (typeof targetElement.insertAdjacentHTML === 'function') {
+    targetElement.insertAdjacentHTML(insertPosition, htmlContent);
+  } else {
+    targetElement.innerHTML = htmlContent;
+  }
+
+  return targetElement;
 }
+
+export const insertText = (element, content, position = 'beforeend') => {
+  if (!element) {
+    throw new Error('Element is null or undefined');
+  }
+
+  const { insertAdjacentText, textContent: currentContent = '' } = element;
+  const newContent = currentContent + (content || '');
+
+  if (insertAdjacentText) {
+    insertAdjacentText(position, content);
+  } else {
+    element.textContent = newContent;
+  }
+
+  return element;
+}
+
+export const insertElement = (target, element, position = 'beforeend') => {
+  if (!target || !element) {
+    throw new Error('Target or element is null or undefined');
+  }
+
+  if (target.insertAdjacentElement) {
+    target.insertAdjacentElement(position, element);
+  } else {
+    target.appendChild(element);
+  }
+
+  return target;
+}
+
+
+/**
+ * Inserts HTML content into an element at the specified position.
+ *
+ * @param {Element} target - The element to insert the HTML into.
+ * @param {string|Element|NodeList} content - The HTML content to insert. Can be a string, an Element, or a NodeList.
+ * @param {string} [position='beforeend'] - The position to insert the content. Defaults to 'beforeend'.
+ * @returns {Element} The target element with the content inserted.
+ * @throws {Error} If the target is null or undefined.
+ * @throws {Error} If the content is not a string, an Element, or a NodeList.
+ */
+export const insert = (target, content, position = 'beforeend') => {
+  if (!target) {
+    throw new Error('Target element is null or undefined');
+  }
+
+  if (content && typeof content === 'string') {
+    const isHtmlString = content.trimStart().startsWith('<');
+    if (isHtmlString) {
+      insertHtml(target, content, position);
+    } else {
+      insertText(target, content, position);
+    }
+  } else if (content instanceof Element) {
+    insertElement(target, content, position);
+  } else if (content instanceof NodeList) {
+    target.append(...Array.from(content));
+  } else {
+    throw new Error('Content is not a string, Element, or NodeList');
+  }
+
+  return target;
+};
 
 /**
  * Creates a new DOM element with the given name and attributes.
@@ -33,6 +99,16 @@ export const createEelement = (name, attributes = {}, doc = document) => {
   for (const key in attributes) {
     const value = attributes[key];
 
+    if(key === "appendEle") {
+      $e(value).insert(el);
+      continue;
+    }
+
+    if(key === "content") {
+      insert(el, value);
+      continue;
+    }
+
     if (key === "text") {
       el.insertAdjacentText("beforeend", value || "");
       continue;
@@ -53,10 +129,27 @@ export const createEelement = (name, attributes = {}, doc = document) => {
     el.setAttribute(key, value);
   }
 
+    /**
+   * Appends one or more nodes to the current element.
+   *
+   * @param {...Node|NodeList|HTMLCollection} params - The nodes to append.
+   * @return {Element} The current element with the appended nodes.
+   */
   el.appends = (...params) => {
     el.append(...[].concat(...params));
     return el;
   };
+
+  /**
+   * Append shadow DOM to the element.
+   *
+   * @param {...string|Node|NodeList|HTMLCollection} params - The nodes to append.
+   * @return {Node} Returns the shadowRoot.
+   */
+  el.createShadowRoot = (...params) => {
+    const shadowRoot = el.shadowRoot || el.attachShadow({ mode: 'open' });
+    return insert(shadowRoot, ...params);
+  }
 
   return el;
 };
@@ -201,4 +294,24 @@ export const drag = (selector, isLeftBound = true, isTopBound = true) => {
       element.style.bottom = `${initialBottom -= yDiff}px`;
     }
   });
+}
+
+export const $e = (selector, doc = document) => {
+  const elements = typeof selector === 'string'
+    ? doc.querySelectorAll(selector)
+    : selector;
+  if (!elements || (elements instanceof NodeList && !elements.length)) {
+    throw new Error(`Element "${selector}" not found`);
+  }
+
+  const element = elements.length > 1 ? elements : (elements[0] || elements);
+  element.insert = (html, position) => insert(element, html, position);
+  element.createShadowRoot = (...params) => {
+    const shadowRoot = element.shadowRoot || element.attachShadow({ mode: 'open' });
+    return insert(shadowRoot, ...params);
+  }
+  element.bindEvents = (...params) => {
+    return bindEvents(element, ...params);
+  }
+  return element;
 }
