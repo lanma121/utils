@@ -1,2 +1,2 @@
-export * from './dom.mjsdom';
+export * from './dom.mjs';
 export * from './request.mjs';

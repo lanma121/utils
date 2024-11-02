@@ -3,10 +3,10 @@ export const insertHtml = (targetElement, htmlContent, insertPosition = 'beforee
     throw new Error('Target element is null or undefined');
   }
 
-  if (typeof targetElement.insertAdjacentHTML === 'function') {
-    targetElement.insertAdjacentHTML(insertPosition, htmlContent);
-  } else {
+  if (insertPosition === 'replace' || !targetElement.insertAdjacentHTML) {
     targetElement.innerHTML = htmlContent;
+  } else {
+    targetElement.insertAdjacentHTML(insertPosition, htmlContent);
   }
 
   return targetElement;
@@ -17,13 +17,12 @@ export const insertText = (element, content, position = 'beforeend') => {
     throw new Error('Element is null or undefined');
   }
 
-  const { insertAdjacentText, textContent: currentContent = '' } = element;
-  const newContent = currentContent + (content || '');
+  const newContent = (element.textContent || '') + (content || '');
 
-  if (insertAdjacentText) {
-    insertAdjacentText(position, content);
+  if (position === 'replace' || !element.insertAdjacentText) {
+    element.textContent = content;
   } else {
-    element.textContent = newContent;
+    element.insertAdjacentText(position, content);
   }
 
   return element;
@@ -32,6 +31,12 @@ export const insertText = (element, content, position = 'beforeend') => {
 export const insertElement = (target, element, position = 'beforeend') => {
   if (!target || !element) {
     throw new Error('Target or element is null or undefined');
+  }
+
+  if (position === 'replace') {
+    while (target.firstChild) {  
+      target.removeChild(target.firstChild);
+    }  
   }
 
   if (target.insertAdjacentElement) {
@@ -104,54 +109,32 @@ export const createEelement = (name, attributes = {}, doc = document) => {
       continue;
     }
 
-    if(key === "content") {
+    if(key === "content" || key === 'children') {
       insert(el, value);
       continue;
     }
 
-    if (key === "text") {
-      el.insertAdjacentText("beforeend", value || "");
-      continue;
-    }
-    if (key === "html") {
-      el.insertAdjacentHTML("beforeend", value || "");
-      continue;
-    }
-    if (key === "elements") {
-      el.append(...[].concat(value));
-      continue;
-    }
+    // if (key === "text") {
+    //   el.insertAdjacentText("beforeend", value || "");
+    //   continue;
+    // }
+    // if (key === "html") {
+    //   el.insertAdjacentHTML("beforeend", value || "");
+    //   continue;
+    // }
+    // if (key === "elements") {
+    //   el.append(...[].concat(value));
+    //   continue;
+    // }
 
     if (key.startsWith("on") && typeof value === "function") {
-      bindEvent(el, key.slice(2), value);
+      bindEvents(el, key.slice(2), value);
       continue;
     }
     el.setAttribute(key, value);
   }
 
-    /**
-   * Appends one or more nodes to the current element.
-   *
-   * @param {...Node|NodeList|HTMLCollection} params - The nodes to append.
-   * @return {Element} The current element with the appended nodes.
-   */
-  el.appends = (...params) => {
-    el.append(...[].concat(...params));
-    return el;
-  };
-
-  /**
-   * Append shadow DOM to the element.
-   *
-   * @param {...string|Node|NodeList|HTMLCollection} params - The nodes to append.
-   * @return {Node} Returns the shadowRoot.
-   */
-  el.createShadowRoot = (...params) => {
-    const shadowRoot = el.shadowRoot || el.attachShadow({ mode: 'open' });
-    return insert(shadowRoot, ...params);
-  }
-
-  return el;
+  return $e(el);
 };
 
 /**
@@ -184,11 +167,7 @@ export const addEventListener = (element, eventName, handler, options = {}) => {
     try {
       handler(event);
     } catch (error) {
-      console.error(
-        `error handling event "${event}"`,
-        new Error().stack,
-        error
-      );
+      console.error(error);
     }
   };
   // Remove the old listener before adding the new one to prevent multiple handlers.
@@ -242,12 +221,82 @@ export const bindEvents = (
       ? selectorOrElement
       : [selectorOrElement]
   );
-  const controllers = elements.map((element) =>
-    addEventListener(element, eventName, handler, options)
-  );
+  const controllers = elements.map((element, index) => {
+    if (element.dataset) {
+      element.dataset.index = index;
+    }
+    return addEventListener(element, eventName, handler, options)
+  });
 
   return (reason) =>
     controllers.forEach((controller) => controller.abort(reason));
+};
+
+const events = {};
+
+export const removeEvents = (eventName, single) => {
+  const singleEvents = events[eventName] || [];
+  const index = singleEvents.findIndex(({options}) => single === options.single);
+  singleEvents.splice(index, 1);
+}
+
+/**
++ * Add multiple event listeners to elements.
++ *
++ * @param {Element|string|NodeList} selectorOrElement - The element or selector to add the event listener to.
++ * @param {string} eventName - The name of the event to listen for.
++ * @param {function} handler - The function to call when the event is fired.
++ * @param {Object} [options] - Options to pass to addEventListener.
++ * @param {AbortSignal} [options.signal] - An AbortSignal to abort the listener.
++ * @returns {() => void} A function to abort all the listeners.
++ */
+export const delegateEvents = (
+  selectorOrElement,
+  eventName,
+  handler,
+  { delegateEle = document, preventBubbling, ...options } = {}
+) => {
+  if (!selectorOrElement) {
+    throw new Error(
+      `bindEvents failed: selectorOrElement is missing or not a truthy value.`
+    );
+  }
+
+  if (!eventName) {
+    throw new Error(`bindEvents failed: eventName is missing`);
+  }
+
+  if (!handler) {
+    throw new Error(`bindEvents failed: handler is missing`);
+  }
+  
+  if (!events[eventName]) {
+    events[eventName] = [];
+    addEventListener(delegateEle, eventName, (event) => {
+      const handledIndex = [];
+      event.composedPath().some((element) => events[event.type]?.forEach(({ handler, selectorOrElement, options }, i) => {
+        if (handledIndex.includes(i)) return;
+        let targets = $e(selectorOrElement, event.currentTarget);
+        targets = !targets ? [] : targets.length ? targets: [targets];
+        for (let index = 0; index < targets.length; index++) {
+          const target = targets[index];
+          if (element === target) {
+            handler(event, {...options, index, target});
+            handledIndex.push(i);
+            break;
+          }
+        }
+      })
+    );
+    }, options);
+  }
+  events[eventName].push({
+    selectorOrElement,
+    eventName,
+    handler,
+    options,
+  });
+  return removeEvents;
 };
 
 
@@ -296,22 +345,96 @@ export const drag = (selector, isLeftBound = true, isTopBound = true) => {
   });
 }
 
-export const $e = (selector, doc = document) => {
+export const parentEle = (selector, parentSelector) => {
+  if (typeof selector === 'string') {
+    return $(selector).parent(parentSelector);
+  }
+  let element = selector; 
+  let arr =  typeof parentSelector ===  'object' ? Object.entries(parentSelector)[0] : [];
+  if (typeof parentSelector === 'string' ) {
+    const selector = parentSelector.split(' ').pop();
+    if (selector.startsWith('#')) {
+      arr = ['id', selector.slice(1)];
+    }
+    if (selector.startsWith('.')) {
+      arr = ['class', selector.slice(1)];
+    }
+  }
+  const [key, value] = arr;
+  while (key && value && element.getAttribute(key) !== value && element.nodeName !== 'BODY') {
+    element = element.parentElement;
+  }
+  return element;
+}
+
+export const getAttribute = () => {};
+
+export const styles = (ele, styleObj = {}) => {
+  const elements = !ele ? [] : ele.length ? ele : [ele];
+  elements.forEach((element) => {
+    Object.keys(styleObj).forEach((key) => {
+      element.style[key] = styleObj[key];
+    })
+  })
+}
+
+export function $e(selector, doc = document) {
   const elements = typeof selector === 'string'
     ? doc.querySelectorAll(selector)
     : selector;
   if (!elements || (elements instanceof NodeList && !elements.length)) {
-    throw new Error(`Element "${selector}" not found`);
+    console.warn(`Element "${selector}" not found`);
+    return null;
   }
 
   const element = elements.length > 1 ? elements : (elements[0] || elements);
   element.insert = (html, position) => insert(element, html, position);
+  element.replace = (html) => insert(element, html, 'replace');
   element.createShadowRoot = (...params) => {
     const shadowRoot = element.shadowRoot || element.attachShadow({ mode: 'open' });
     return insert(shadowRoot, ...params);
   }
+
+  element.find = (selector) => $e(selector, element);
+ 
+  element.styles = (styleObj) => styles(element, styleObj);
+  element.hide = () => element.style.display = 'none';
+  element.show = (display = 'block') => element.style.display = display;
+
   element.bindEvents = (...params) => {
     return bindEvents(element, ...params);
   }
+
+  element.parent = (parentSelector) => {
+    return parentEle(element, parentSelector);
+  }
+
+  element.appendTo = (selector) => {
+    insert($e(selector), element);
+    return element;
+  }
+
+  /**
+   * Appends one or more nodes to the current element.
+   *
+   * @param {...Node|NodeList|HTMLCollection} params - The nodes to append.
+   * @return {Element} The current element with the appended nodes.
+   */
+  element.appends = (...params) => {
+    element.append(...[].concat(...params));
+    return element;
+  };
+
+  /**
+   * Append shadow DOM to the element.
+   *
+   * @param {...string|Node|NodeList|HTMLCollection} params - The nodes to append.
+   * @return {Node} Returns the shadowRoot.
+   */
+  element.createShadowRoot = (...params) => {
+    const shadowRoot = element.shadowRoot || element.attachShadow({ mode: 'open' });
+    return insert(shadowRoot, ...params);
+  }
+
   return element;
 }
