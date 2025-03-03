@@ -24,6 +24,7 @@
   "dependencies": {
     "@babel/cli": "^7.24.6",
     "@babel/preset-env": "^7.24.6",
+    "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
