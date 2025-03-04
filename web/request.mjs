@@ -1,6 +1,3 @@
-
-console.log(fetch);
-
 export const processStream = async (reader, text = '') => {
   let { value, done } = await reader.read();
   if (done) {
@@ -20,19 +17,80 @@ export const processStream = async (reader, text = '') => {
   return processStream(reader, text);
 }
 
-export const eventStream = async (reader, datas = []) => {
+export const stringToJson = (param) => {
+  if (!param || typeof param !== 'string') {
+    console.error(param + ' is not string');
+  }
+  try {
+    const signo = param.indexOf('{');
+    const signa = param.indexOf(']');
+    const sign = signa >= 0 && signa < signo ? ']' : signo >= 0 ? '}' : ']';
+    const start = sign === ']' ? signa : signo;
+    const end = param.lastIndexOf(sign) + 1;
+    return JSON.parse(param.substring(start, end));
+  } catch (error) {
+    console.error(param + ' parse error');
+    return null;
+  }
+}
+
+async function parseEventStream(reader, onEvent, onError) {  
+  try {  
+      const texts = [];
+      const textDecoder = new TextDecoder("utf-8");  
+      let partialData = ""; // Buffer for incomplete events  
+      while (true) {  
+        let { done, value } = await reader.read(); // Read data from the stream  
+        if (done) {  
+            break; // Exit loop if done  
+        }  
+        partialData += textDecoder.decode(value, { stream: true }); // Decode the data
+        //SSE-specific splitting (e.g., events separated by \n\n)  
+        const events = partialData.split('\n\n'); // Adjust delimiter if needed  
+        console.log('=====', events);
+
+        partialData = events.pop() || ""; // Store the last (potentially incomplete) event  
+        for (const event of events) {  
+          if (event.trim() === "") continue;  // Skip empty events  
+          event.split("\n").forEach((line) => {
+            const json = line && stringToJson(line);
+            if (!json) return; 
+            if (typeof onEvent === 'function') {// Callback for processing the event
+              onEvent(json);
+            }
+            const text = json.data?.text || '';
+            if (text) {
+              texts.push(text);
+            }
+          });
+          
+            
+      }  
+    }
+    console.log('--------finished', texts);
+    return texts.join('');
+  } catch (error) {
+    console.log(r(`Error parsing event: ${parseError.message}, Event data: ${event}`));
+    if (typeof onError === 'function') {
+      onError(new Error(`Error parsing event: ${parseError.message}, Event data: ${event}`));  
+    }
+    throw error;
+  }  
+}  
+
+export const eventStream = async (reader, datas = [], isError = false) => {
   let { value, done } = await reader.read();
   const decoder = new TextDecoder("utf-8");
   const chunk = decoder.decode(value, { stream: true });
 
-  console.log('--------====:', chunk); // Get the data part  
+  console.log(done, '--------====:', chunk); // Get the data part  
   const events = chunk.split("\n\n"); // Split on double newlines
   console.log(events, 'Received data====:', chunk); // Get the data part  
   let words = '', data = '';
   try {
     for (const event of events) {
       data = event.split("\n").find(line => line.startsWith("data:"))?.slice(5); 
-      done = done || data === "[DONE]";
+      done = done || data === "[DONE]" || data === " [DONE]";
       if (data && !done) {
         const text = JSON.parse(data).data?.text;
         if (text) {
@@ -50,6 +108,9 @@ export const eventStream = async (reader, datas = []) => {
     return eventStream(reader, datas);
   } catch (error) {
     console.error(error);
+    if (!isError) {
+      eventStream(reader, datas, true);
+    }
     return error;
   }
 };
@@ -60,7 +121,7 @@ export const request = (url,  config = {}) => {
     return;
   }
 
-  const { url: uri, data = undefined, headers = {}, success, stream, ...option } = 
+  const { url: uri, data = undefined, headers = {}, success, ...option } = 
     typeof url === 'object' ? Object.assign({}, config, url) : Object.assign({}, config, {url});
   url = uri;
   console.log('API request: ', url, data);
@@ -89,6 +150,8 @@ export const request = (url,  config = {}) => {
         // referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
       });
 
+      console.log('_____===____', response)
+
       if (!response.ok) {
         const message = await response.text();
         throw new Error(
@@ -101,14 +164,18 @@ export const request = (url,  config = {}) => {
           })
         );
       }
+      const type = response.headers.get('Content-Type').split(';')[0];
+      if (type === 'text/event-stream') {
+        const reader = response.body.getReader();
+        const datas = await parseEventStream(reader, success);
+        return resolve(datas);
+      }
       if (typeof success === 'function') {
         return resolve(success(response));
       }
-      const type = response.headers.get('Content-Type').split(';')[0]; 
-      if (type === 'text/event-stream') {
-        const reader = response.body.getReader();
-        const datas = await eventStream(reader, stream);
-        return resolve(datas);
+      if (type === 'application/wasm') {
+        const buffer = await response.arrayBuffer();
+        return resolve(WebAssembly.instantiate(buffer, {wbg: {}}));
       }
       if (type === 'text/html' || type === 'text/plain') {
         return resolve(response.text());
@@ -116,6 +183,7 @@ export const request = (url,  config = {}) => {
       if (type === 'application/json') {
         return resolve(response.json());
       }
+      resolve(response);
     } catch (error) {
       console.error(error);
       reject(error);
