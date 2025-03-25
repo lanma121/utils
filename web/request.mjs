@@ -35,13 +35,20 @@ export const stringToJson = (param) => {
 }
 
 async function parseEventStream(reader, onEvent, onError) {  
-  try {  
+  try {
+      const results = {
+        result: [],
+        metadata: { title: "", reasoning_details: [] }
+      };
       const texts = [];
       const textDecoder = new TextDecoder("utf-8");  
       let partialData = ""; // Buffer for incomplete events  
       while (true) {  
         let { done, value } = await reader.read(); // Read data from the stream  
-        if (done) {  
+        if (done) { 
+            if (typeof onEvent === 'function') {// Callback for processing the event
+              onEvent(value, done);
+            } 
             break; // Exit loop if done  
         }  
         partialData += textDecoder.decode(value, { stream: true }); // Decode the data
@@ -50,7 +57,7 @@ async function parseEventStream(reader, onEvent, onError) {
         console.log('=====', events);
 
         partialData = events.pop() || ""; // Store the last (potentially incomplete) event  
-        for (const event of events) {  
+        for (const event of events) {
           if (event.trim() === "") continue;  // Skip empty events  
           event.split("\n").forEach((line) => {
             const json = line && stringToJson(line);
@@ -58,25 +65,42 @@ async function parseEventStream(reader, onEvent, onError) {
             if (typeof onEvent === 'function') {// Callback for processing the event
               onEvent(json);
             }
-            const text = json.data?.text || '';
+            const data = json.data || json;
+            const {metadata} = data.agent_status || {};
+            const text = data.text || '';
             if (text) {
-              texts.push(text);
+              results.result.push(text);
+            }
+            if (metadata) {
+              const {title, reasoning_detail} = metadata;
+              if (title) {
+                results.metadata.title = title;
+              }
+              if (reasoning_detail) {
+                results.metadata.reasoning_details.push(reasoning_detail);
+              } 
+              
             }
           });
-          
-            
       }  
     }
-    console.log('--------finished', texts);
-    return texts.join('');
+
+    const result = results.result.join('');
+    const title = results.metadata.title;
+    const reasons = results.metadata.reasoning_details.join('');
+    return {
+      title,
+      reasons,
+      result
+    };
   } catch (error) {
-    console.log(r(`Error parsing event: ${parseError.message}, Event data: ${event}`));
+    console.log(`Error parsing event: ${error.message}, Event data: `, error);
     if (typeof onError === 'function') {
-      onError(new Error(`Error parsing event: ${parseError.message}, Event data: ${event}`));  
+      return onError(error);  
     }
     throw error;
-  }  
-}  
+  }
+}
 
 export const eventStream = async (reader, datas = [], isError = false) => {
   let { value, done } = await reader.read();
@@ -115,82 +139,81 @@ export const eventStream = async (reader, datas = [], isError = false) => {
   }
 };
 
-export const request = (url,  config = {}) => {
+export const getController = () => new AbortController();
+
+export const request = async (url,  config = {}) => {
   if (!url) {
     console.error('url is Invalid', url);
     return;
   }
 
-  const { url: uri, data = undefined, headers = {}, success, ...option } = 
+  const { url: uri, data = undefined, headers = {}, controller = {}, success, ...option } = 
     typeof url === 'object' ? Object.assign({}, config, url) : Object.assign({}, config, {url});
   url = uri;
-  console.log('API request: ', url, data);
+  console.log('API request: ', url, JSON.stringify(data));
   
-  const controller = new AbortController();
-  const promise = new Promise(async (resolve, reject) => {
-    try {
-      const body = data ? JSON.stringify(data) : null;
-      const response = await fetch(url, {
-        signal: controller.signal,
-        method: data ? "POST" : "GET", // *GET, POST, PUT, DELETE, etc.
-        // mode: "cors", // no-cors, *cors, same-origin
-        // cache: "no-cache", // *default, no-cache, reload, force-cache, only-if-cached
-        // credentials: "same-origin", // include, *same-origin, omit
-        headers: {
-            // "Content-Type": "application/json",
-          //   'Content-Type': 'application/x-www-form-urlencoded',
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-          ...headers
-        },
-        ...option,
-        body,
-        // credentials: "include", // This line ensures cookies are sent with the request
-        // redirect: "follow", // manual, *follow, error
-        // referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
-      });
+  try {
+    const body = data ? JSON.stringify(data) : null;
+    const response = await fetch(url, {
+      signal: controller.signal,
+      method: data ? "POST" : "GET", // *GET, POST, PUT, DELETE, etc.
+      // mode: "cors", // no-cors, *cors, same-origin
+      // cache: "no-cache", // *default, no-cache, reload, force-cache, only-if-cached
+      // credentials: "same-origin", // include, *same-origin, omit
+      headers: {
+          // "Content-Type": "application/json",
+        //   'Content-Type': 'application/x-www-form-urlencoded',
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+        ...headers
+      },
+      ...option,
+      body,
+      // credentials: "include", // This line ensures cookies are sent with the request
+      // redirect: "follow", // manual, *follow, error
+      // referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
+    });
 
-      console.log('_____===____', response)
+    console.log('_____===____', response);
 
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(
-          JSON.stringify({
-            url,
-            message,
-            status: response.status,
-            statusText: response.statusText,
-            type: response.type
-          })
-        );
-      }
-      const type = response.headers.get('Content-Type').split(';')[0];
-      if (type === 'text/event-stream') {
-        const reader = response.body.getReader();
-        const datas = await parseEventStream(reader, success);
-        return resolve(datas);
-      }
-      if (typeof success === 'function') {
-        return resolve(success(response));
-      }
-      if (type === 'application/wasm') {
-        const buffer = await response.arrayBuffer();
-        return resolve(WebAssembly.instantiate(buffer, {wbg: {}}));
-      }
-      if (type === 'text/html' || type === 'text/plain') {
-        return resolve(response.text());
-      }
-      if (type === 'application/json') {
-        return resolve(response.json());
-      }
-      resolve(response);
-    } catch (error) {
-      console.error(error);
-      reject(error);
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(
+        JSON.stringify({
+          url,
+          message,
+          status: response.status,
+          statusText: response.statusText,
+          type: response.type
+        })
+      );
     }
-  });
-  promise.controller = controller;
-  return promise;
+    console.log('=======================', response.headers.getSetCookie());
+    const type = response.headers.get('Content-Type')?.split(';')[0];
+    if (type === 'text/event-stream') {
+      const reader = response.body.getReader();
+      const datas = await parseEventStream(reader, success);
+      return datas;
+    }
+    if (typeof success === 'function') {
+      return success(response);
+    }
+    if (type === 'application/wasm') {
+      const buffer = await response.arrayBuffer();
+      return WebAssembly.instantiate(buffer, {wbg: {}});
+    }
+    if (type === 'text/html' || type === 'text/plain') {
+      return await response.text();
+    }
+    if (type === 'application/json') {
+      const data = await response.json();
+      return data;
+    }
+    return response;
+  } catch (error) {
+    console.error(error);
+    throw error;
+  }
 };
 
 export default request;
