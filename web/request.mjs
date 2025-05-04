@@ -1,3 +1,33 @@
+import getLocalStorage from '../nodejs/localStorage.mjs';
+
+export function parseCookieToArray(cookieStr) {
+  if (cookieStr.join) {
+    return cookieStr.flatMap((cookie) => parseCookie(cookie));
+  }
+  return cookieStr.split(';').map(cookie => {
+    const [nameValue, ...attributes] = cookie.trim().split(';');
+    const [name, value] = nameValue.split('=').map(s => s.trim());
+    const cookieObj = { name, value: decodeURIComponent(value) }; 
+    attributes.forEach(attr => {
+      const [key, val] = attr.split('=').map(s => s.trim());
+      cookieObj[key] = val || true; // 处理无值的属性（如HttpOnly）
+    });
+    return cookieObj;
+  });
+}
+
+function parseCookieToObj(cookieStr) {
+  if (cookieStr.join) {
+    return cookieStr.reduce((obj, cookie) => Object.assign(obj,parseCookie(cookie)), {});
+  }
+  return cookieStr.split(';').reduce((obj, cookie) => {
+    const [nameValue, ...attributes] = cookie.trim().split(';');
+    const [name, value] = nameValue.split('=').map(s => s.trim());
+    Object.assign(obj, {[name]: decodeURIComponent(value)});
+    return obj;
+  }, {});
+}
+
 export const processStream = async (reader, text = '') => {
   let { value, done } = await reader.read();
   if (done) {
@@ -20,6 +50,7 @@ export const processStream = async (reader, text = '') => {
 export const stringToJson = (param) => {
   if (!param || typeof param !== 'string') {
     console.error(param + ' is not string');
+    return null;
   }
   try {
     const signo = param.indexOf('{');
@@ -107,7 +138,6 @@ export const eventStream = async (reader, datas = [], isError = false) => {
   const decoder = new TextDecoder("utf-8");
   const chunk = decoder.decode(value, { stream: true });
 
-  console.log(done, '--------====:', chunk); // Get the data part  
   const events = chunk.split("\n\n"); // Split on double newlines
   console.log(events, 'Received data====:', chunk); // Get the data part  
   let words = '', data = '';
@@ -140,6 +170,7 @@ export const eventStream = async (reader, datas = [], isError = false) => {
 };
 
 export const getController = () => new AbortController();
+export const abort = (controller) => controller.abort();
 
 export const request = async (url,  config = {}) => {
   if (!url) {
@@ -147,13 +178,14 @@ export const request = async (url,  config = {}) => {
     return;
   }
 
-  const { url: uri, data = undefined, headers = {}, controller = {}, success, ...option } = 
+  const { url: uri, data = undefined, headers = {}, controller = {}, success, saveCookie, ...option } = 
     typeof url === 'object' ? Object.assign({}, config, url) : Object.assign({}, config, {url});
   url = uri;
-  console.log('API request: ', url, JSON.stringify(data));
-  
+  console.log('API request: ', new Date().toString(), url, JSON.stringify(data), JSON.stringify(headers), controller);
   try {
-    const body = data ? JSON.stringify(data) : null;
+
+    const body = headers['Content-Type'].includes('application/x-www-form-urlencoded') ? 
+                  new URLSearchParams(data).toString() : data ? JSON.stringify(data) : null;
     const response = await fetch(url, {
       signal: controller.signal,
       method: data ? "POST" : "GET", // *GET, POST, PUT, DELETE, etc.
@@ -163,6 +195,7 @@ export const request = async (url,  config = {}) => {
       headers: {
           // "Content-Type": "application/json",
         //   'Content-Type': 'application/x-www-form-urlencoded',
+        'Connection': 'keep-alive',
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         ...headers
@@ -174,7 +207,7 @@ export const request = async (url,  config = {}) => {
       // referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
     });
 
-    console.log('_____===____', response);
+    console.log('API Response', new Date().toString(), url, response);
 
     if (!response.ok) {
       const message = await response.text();
@@ -188,7 +221,14 @@ export const request = async (url,  config = {}) => {
         })
       );
     }
-    console.log('=======================', response.headers.getSetCookie());
+    const cookie_value = response.headers.getSetCookie();
+    console.log('=======Cookie:', cookie_value);
+    if (saveCookie && cookie_value) {
+      const {hostname, pathname} = new URL(url);
+      const key = hostname + '/' + pathname;
+      const localStorage = await getLocalStorage('./cookie.json');
+      localStorage.setItem(key, cookie_value);
+    }
     const type = response.headers.get('Content-Type')?.split(';')[0];
     if (type === 'text/event-stream') {
       const reader = response.body.getReader();
@@ -215,5 +255,16 @@ export const request = async (url,  config = {}) => {
     throw error;
   }
 };
+
+export const requestControl = (url, config = {}) => {
+  const controller = getController();
+  config.controller = controller;
+  const promise = request(url, config);
+
+  return {
+    promise,
+    controller
+  };
+}
 
 export default request;
